@@ -208,6 +208,9 @@ const ESTADO_INICIAL = {
     ]},
   ],
   historicoTreinos: [],
+  // Planejamento: { "2026-06-30": [{tipo:"ficha", fichaId:"A"}, {tipo:"atividade", nome:"Corrida", met:10, duracaoMin:30}] }
+  // São intenções para dias futuros; ao confirmar, viram treino de verdade no histórico.
+  treinosPlanejados: {},
 };
 
 // ============================ ESTILOS =======================================
@@ -750,6 +753,87 @@ function ModalSalvarRef({ itens, dados, setDados, onClose }) {
   );
 }
 
+// Modal: criar uma ficha de musculação nova
+function ModalNovaFicha({ onCriar, onClose }) {
+  const [nome, setNome] = useState("");
+  function criar() {
+    if (!nome.trim()) { alert("Dê um nome para a ficha."); return; }
+    onCriar(nome.trim());
+  }
+  return (
+    <Modal titulo="Nova ficha de musculação" onClose={onClose}>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+        Dê um nome (ex: "Treino D — Posterior", "Push", "Full body"). Depois você adiciona os exercícios na tela de edição.
+      </div>
+      <input placeholder="Nome da ficha" value={nome} onChange={(e) => setNome(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+      <button onClick={criar} style={btnPrimary}>Criar e adicionar exercícios</button>
+    </Modal>
+  );
+}
+
+// Modal: registrar atividade avulsa (boxe, corrida, bike...)
+function ModalAtividade({ onRegistrar, onClose }) {
+  const [nome, setNome] = useState(ATIVIDADES_MET[2].nome); // padrão: Boxe
+  const [met, setMet] = useState(ATIVIDADES_MET[2].met);
+  const [data, setData] = useState(hoje());
+  const [duracaoMin, setDuracaoMin] = useState("");
+  const [fonte, setFonte] = useState("formula"); // formula | manual
+  const [kcalManual, setKcalManual] = useState("");
+
+  function escolherAtividade(nomeSel) {
+    const a = ATIVIDADES_MET.find((x) => x.nome === nomeSel);
+    setNome(a.nome); setMet(a.met);
+  }
+  function registrar() {
+    const dur = parseInt(duracaoMin, 10);
+    if (!dur || dur < 1) { alert("Informe a duração em minutos."); return; }
+    if (fonte === "manual") {
+      const kc = parseInt(kcalManual, 10);
+      if (!kc || kc < 0) { alert("Informe as calorias do relógio."); return; }
+      onRegistrar({ nome, met, data, duracaoMin: dur, kcalManual: kc });
+    } else {
+      onRegistrar({ nome, met, data, duracaoMin: dur, kcalManual: null });
+    }
+  }
+
+  return (
+    <Modal titulo="Registrar atividade" onClose={onClose}>
+      <label style={lbl}>Atividade</label>
+      <select value={nome} onChange={(e) => escolherAtividade(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
+        {ATIVIDADES_MET.map((a) => <option key={a.nome} value={a.nome}>{a.nome}</option>)}
+      </select>
+
+      <label style={lbl}>Data</label>
+      <div style={{ marginBottom: 12 }}>
+        <SeletorData value={data} onChange={setData} />
+      </div>
+
+      <label style={lbl}>Duração (minutos)</label>
+      <input type="number" min="1" value={duracaoMin} onChange={(e) => setDuracaoMin(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button onClick={() => setFonte("formula")} style={fonte === "formula" ? toggleOn : toggleOff}>Estimar (fórmula)</button>
+        <button onClick={() => setFonte("manual")} style={fonte === "manual" ? toggleOn : toggleOff}>Do relógio</button>
+      </div>
+
+      {fonte === "manual" ? (
+        <div style={{ marginBottom: 12 }}>
+          <label style={lbl}>Calorias do relógio</label>
+          <input type="number" value={kcalManual} onChange={(e) => setKcalManual(e.target.value)} style={inputStyle} />
+        </div>
+      ) : (
+        duracaoMin && (
+          <div style={{ fontSize: 13, color: ACCENT, fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>
+            Estimativa: {calcularCaloriasTreino(met, 83, +duracaoMin)} kcal aprox.
+          </div>
+        )
+      )}
+
+      <button onClick={registrar} style={btnPrimary}>Registrar no histórico</button>
+    </Modal>
+  );
+}
+
 function Modal({ titulo, children, onClose }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100 }}>
@@ -1092,6 +1176,9 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
   const [intensidade, setIntensidade] = useState(6);
   const [kcalSW, setKcalSW] = useState("");
   const [fonteKcal, setFonteKcal] = useState("formula");
+  // Modais de criar ficha nova e registrar atividade avulsa
+  const [showNovaFicha, setShowNovaFicha] = useState(false);
+  const [showAtividade, setShowAtividade] = useState(false);
 
   // Cronômetro: guardamos o INSTANTE de início e calculamos o tempo decorrido
   // pela diferença com "agora". Isso é robusto: mesmo se a tela do celular
@@ -1186,6 +1273,38 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
     setDados({ ...dados, historicoTreinos: lista });
     setEditandoTreino(null); setRascunhoT(null);
     alert("Treino de " + fmtData(rascunhoT.data) + " atualizado.");
+  }
+
+  // ---- CRIAR / APAGAR ficha ----
+  // Gera um id único para a ficha nova (timestamp evita colisão com A/B/C).
+  function criarFicha(nome) {
+    const nova = { id: "f" + Date.now(), nome: nome, exercicios: [] };
+    setDados({ ...dados, fichas: [...dados.fichas, nova] });
+    setShowNovaFicha(false);
+    setEditandoFicha(nova.id); // já abre a edição para adicionar exercícios
+  }
+  function apagarFicha(fichaId) {
+    const ficha = dados.fichas.find((f) => f.id === fichaId);
+    if (!confirm('Apagar a ficha "' + ficha.nome + '"? Os treinos já registrados com ela continuam no histórico.')) return;
+    setDados({ ...dados, fichas: dados.fichas.filter((f) => f.id !== fichaId) });
+  }
+
+  // ---- REGISTRAR ATIVIDADE AVULSA (boxe, corrida, bike...) ----
+  // Não tem séries nem carga: calcula calorias pela fórmula MET e vai ao histórico.
+  function registrarAtividade({ nome, met, data, duracaoMin, kcalManual }) {
+    const kcal = kcalManual != null ? kcalManual : calcularCaloriasTreino(met, pesoAtual, duracaoMin);
+    const reg = {
+      id: Date.now(),
+      data,
+      fichaId: null, // sem ficha
+      atividade: nome, // nome da atividade avulsa
+      duracaoMin,
+      kcal,
+      fonteKcal: kcalManual != null ? "smartwatch" : "formula",
+      series: {}, // sem séries
+    };
+    setDados({ ...dados, historicoTreinos: [reg, ...dados.historicoTreinos] });
+    setShowAtividade(false);
   }
 
   // ---- treino em andamento ----
@@ -1304,13 +1423,24 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
                 <div style={{ color: TEXT, fontWeight: 700, fontSize: 14 }}>{f.nome}</div>
                 <div style={{ color: MUTED, fontSize: 12 }}>{f.exercicios.length} exercícios</div>
               </div>
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={() => setEditandoFicha(f.id)} style={btnGhost}>Editar</button>
                 <button onClick={() => iniciar(f.id)} style={btnPrimarySm}>Iniciar</button>
+                <button onClick={() => apagarFicha(f.id)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Apagar ficha">×</button>
               </div>
             </div>
           </div>
         ))}
+        <button onClick={() => setShowNovaFicha(true)} style={{ ...btnSec, width: "100%", marginTop: 4 }}>+ Nova ficha de musculação</button>
+      </div>
+
+      {/* Atividades avulsas: boxe, corrida, bike... */}
+      <div style={card}>
+        <div style={cardTitle}>ATIVIDADE AVULSA</div>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+          Para boxe, corrida, bike e outras atividades sem séries. Registra tempo e calorias direto no histórico.
+        </div>
+        <button onClick={() => setShowAtividade(true)} style={btnPrimary}>+ Registrar atividade</button>
       </div>
       {dados.historicoTreinos.length > 0 && (
         <div style={card}>
@@ -1323,7 +1453,7 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
               <div key={chave} style={{ padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <div style={{ color: TEXT, fontSize: 14 }}>{ficha ? ficha.nome.split("—")[0] : t.fichaId}</div>
+                    <div style={{ color: TEXT, fontSize: 14 }}>{ficha ? ficha.nome.split("—")[0] : (t.atividade || t.fichaId)}</div>
                     <div style={{ color: MUTED, fontSize: 12 }}>{fmtData(t.data)} · {t.duracaoMin}min</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1391,7 +1521,286 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
           })}
         </div>
       )}
+
+      {showNovaFicha && <ModalNovaFicha onCriar={criarFicha} onClose={() => setShowNovaFicha(false)} />}
+      {showAtividade && <ModalAtividade onRegistrar={registrarAtividade} onClose={() => setShowAtividade(false)} />}
     </div>
+  );
+}
+
+// ============================ [UI-RESUMO] ===================================
+/*
+ * ABA RESUMO DO DIA — visão consolidada de dieta + treino de um dia qualquer.
+ * Navega para o passado (ver o que foi feito), hoje, e o futuro (planejar).
+ * Para datas futuras, mostra o PLANEJAMENTO e deixa adicionar treinos planejados.
+ * Quando um plano chega (data <= hoje), aparece o botão de CONFIRMAR, que
+ * transforma o planejado em treino de verdade no histórico.
+ */
+function AbaResumo({ dados, setDados, pesoAtual, irPara }) {
+  const [d, setD] = useState(hoje());
+  const h = hoje();
+  const ehFuturo = d > h;
+  const ehHoje = d === h;
+  const ehPassado = d < h;
+  const metaCal = dados.metaCalorias || TMB_INBODY;
+
+  // Modal de adicionar treino ao plano
+  const [showAddPlano, setShowAddPlano] = useState(false);
+
+  // --- DIETA do dia ---
+  const dia = dados.diario[d];
+  const itens = dia ? dia.itens : [];
+  const consumido = itens.reduce((a, it) => ({ kcal: a.kcal + it.kcal, p: a.p + it.p, c: a.c + it.c, g: a.g + it.g }), { kcal: 0, p: 0, c: 0, g: 0 });
+  const refeicoesFeitas = dia ? (dia.refeicoesFeitas || {}) : {};
+  const qtdRefeicoesFeitas = REFEICOES_PLANO.filter((r) => refeicoesFeitas[r.id]).length;
+
+  // --- ÁGUA do dia ---
+  const aguaDia = (dados.aguaPorDia && dados.aguaPorDia[d]) || 0;
+  const metaAgua = dados.metaAgua || calcularMetaAgua(pesoAtual);
+
+  // --- TREINOS realizados no dia ---
+  const treinosDia = dados.historicoTreinos.filter((t) => t.data === d);
+  const gastoTreino = treinosDia.reduce((a, t) => a + t.kcal, 0);
+
+  // --- PLANO do dia ---
+  const plano = (dados.treinosPlanejados && dados.treinosPlanejados[d]) || [];
+
+  // Nome legível de um item de treino (realizado ou planejado)
+  function nomeTreino(t) {
+    if (t.atividade) return t.atividade;
+    if (t.tipo === "atividade") return t.nome;
+    const fid = t.fichaId;
+    const ficha = dados.fichas.find((f) => f.id === fid);
+    return ficha ? ficha.nome.split("—")[0].trim() : (fid || "Treino");
+  }
+
+  // Remove um item do plano
+  function removerDoPlano(idx) {
+    const novo = plano.filter((_, i) => i !== idx);
+    setDados({ ...dados, treinosPlanejados: { ...dados.treinosPlanejados, [d]: novo } });
+  }
+
+  // Confirma UM item do plano: vira treino de verdade no histórico
+  function confirmarItem(item, idx) {
+    let reg;
+    if (item.tipo === "atividade") {
+      const kcal = calcularCaloriasTreino(item.met, pesoAtual, item.duracaoMin || 30);
+      reg = { id: Date.now(), data: d, fichaId: null, atividade: item.nome, duracaoMin: item.duracaoMin || 30, kcal, fonteKcal: "formula", series: {} };
+    } else {
+      // ficha de musculação: cria registro com as séries-alvo da ficha
+      const ficha = dados.fichas.find((f) => f.id === item.fichaId);
+      const series = {};
+      if (ficha) ficha.exercicios.forEach((ex, i) => { series[i] = Array.from({ length: ex.series }, () => ({ reps: ex.repsAlvo, carga: "" })); });
+      const dur = item.duracaoMin || 60;
+      const kcal = calcularCaloriasTreino(6, pesoAtual, dur);
+      reg = { id: Date.now(), data: d, fichaId: item.fichaId, duracaoMin: dur, kcal, fonteKcal: "formula", series };
+    }
+    const novoPlano = plano.filter((_, i) => i !== idx);
+    setDados({
+      ...dados,
+      historicoTreinos: [reg, ...dados.historicoTreinos],
+      treinosPlanejados: { ...dados.treinosPlanejados, [d]: novoPlano },
+    });
+    alert("Treino confirmado e adicionado ao seu histórico!");
+  }
+
+  // Adiciona um item ao plano (vindo do modal)
+  function adicionarAoPlano(item) {
+    const atual = (dados.treinosPlanejados && dados.treinosPlanejados[d]) || [];
+    setDados({ ...dados, treinosPlanejados: { ...dados.treinosPlanejados, [d]: [...atual, item] } });
+    setShowAddPlano(false);
+  }
+
+  const corData = ehHoje ? ACCENT : ehFuturo ? BLUE : TEXT;
+
+  return (
+    <div>
+      {/* Navegação de data — futuro liberado (maxHoje=false) */}
+      <div style={{ ...card, padding: 12 }}>
+        <SeletorData value={d} onChange={setD} maxHoje={false} />
+        <div style={{ textAlign: "center", marginTop: 8, fontSize: 12, color: corData, fontWeight: 600 }}>
+          {ehHoje ? "Hoje" : ehFuturo ? "Planejamento futuro" : "Dia passado"}
+        </div>
+        {!ehHoje && (
+          <button onClick={() => setD(h)} style={{ ...btnGhost, width: "100%", marginTop: 8, color: ACCENT, borderColor: ACCENT }}>
+            ↩ Voltar para hoje
+          </button>
+        )}
+      </div>
+
+      {/* ===== DIETA ===== */}
+      <div style={card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={cardTitle}>🍽 ALIMENTAÇÃO</span>
+          <button onClick={() => irPara("hoje")} style={btnGhost}>Abrir →</button>
+        </div>
+        {itens.length > 0 ? (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+              <div style={{ fontSize: 28, fontWeight: 900, color: corData, fontFamily: "'DM Mono', monospace" }}>
+                {consumido.kcal}<span style={{ fontSize: 14, color: MUTED }}> / {metaCal} kcal</span>
+              </div>
+            </div>
+            <Barra atual={consumido.kcal} meta={metaCal} label="Calorias" cor={ACCENT} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+              {[["P", consumido.p, BLUE], ["C", consumido.c, ORANGE], ["G", consumido.g, PINK]].map(([l, v, cor]) => (
+                <div key={l} style={{ background: CARD2, borderRadius: 8, padding: "8px 6px", textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: MUTED }}>{l}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: cor, fontFamily: "'DM Mono', monospace" }}>{Math.round(v)}g</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
+              {itens.length} {itens.length === 1 ? "item registrado" : "itens registrados"} · {qtdRefeicoesFeitas}/{REFEICOES_PLANO.length} refeições do plano
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: MUTED, fontSize: 14 }}>
+            {ehFuturo ? "Planejamento de refeições chega numa próxima atualização." : ehHoje ? "Nada registrado ainda hoje." : "Nada foi registrado neste dia."}
+          </div>
+        )}
+      </div>
+
+      {/* ===== ÁGUA (resumo) ===== */}
+      {!ehFuturo && (
+        <div style={card}>
+          <div style={cardTitle}>💧 ÁGUA</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: aguaDia >= metaAgua ? ACCENT : BLUE, fontFamily: "'DM Mono', monospace" }}>
+              {(aguaDia / 1000).toFixed(1).replace(".", ",")} / {(metaAgua / 1000).toFixed(1).replace(".", ",")} L
+            </div>
+            <div style={{ fontSize: 12, color: MUTED }}>{aguaDia >= metaAgua ? "✓ meta batida" : Math.round((aguaDia / metaAgua) * 100) + "%"}</div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== TREINO ===== */}
+      <div style={card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={cardTitle}>🏋 TREINO</span>
+          <button onClick={() => irPara("treinos")} style={btnGhost}>Abrir →</button>
+        </div>
+
+        {/* Treinos realizados */}
+        {treinosDia.length > 0 && (
+          <div style={{ marginBottom: plano.length > 0 ? 14 : 0 }}>
+            {treinosDia.map((t, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid " + BORDER }}>
+                <div>
+                  <div style={{ color: TEXT, fontSize: 14, fontWeight: 600 }}>✓ {nomeTreino(t)}</div>
+                  <div style={{ color: MUTED, fontSize: 12 }}>{t.duracaoMin} min · realizado</div>
+                </div>
+                <div style={{ color: ACCENT, fontFamily: "'DM Mono', monospace", fontWeight: 700 }}>{t.kcal} kcal</div>
+              </div>
+            ))}
+            {treinosDia.length > 0 && (
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>Gasto total: {gastoTreino} kcal</div>
+            )}
+          </div>
+        )}
+
+        {/* Plano de treino do dia */}
+        {plano.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, color: BLUE, fontWeight: 700, marginBottom: 8, letterSpacing: 0.5 }}>
+              {ehFuturo ? "PLANEJADO" : "PLANEJADO (confirme o que fez)"}
+            </div>
+            {plano.map((item, idx) => (
+              <div key={idx} style={{ background: CARD2, border: "1px dashed " + BLUE, borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ color: TEXT, fontSize: 14, fontWeight: 600 }}>{nomeTreino(item)}</div>
+                    <div style={{ color: MUTED, fontSize: 12 }}>
+                      {item.tipo === "atividade" ? (item.duracaoMin || 30) + " min · atividade" : "musculação"}
+                    </div>
+                  </div>
+                  <button onClick={() => removerDoPlano(idx)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Remover do plano">×</button>
+                </div>
+                {/* Botão confirmar só quando o dia chegou (hoje ou passado) */}
+                {!ehFuturo && (
+                  <button onClick={() => confirmarItem(item, idx)} style={{ ...btnPrimarySm, width: "100%", marginTop: 10 }}>
+                    ✓ Confirmar que fiz
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Sem treino nem plano */}
+        {treinosDia.length === 0 && plano.length === 0 && (
+          <div style={{ color: MUTED, fontSize: 14, marginBottom: 12 }}>
+            {ehFuturo ? "Nada planejado para este dia." : ehHoje ? "Nenhum treino registrado hoje." : "Nenhum treino neste dia."}
+          </div>
+        )}
+
+        {/* Botão de adicionar ao plano (hoje e futuro) */}
+        {!ehPassado && (
+          <button onClick={() => setShowAddPlano(true)} style={{ ...btnSec, width: "100%", marginTop: 12 }}>
+            + Planejar treino para {ehHoje ? "hoje" : "este dia"}
+          </button>
+        )}
+      </div>
+
+      {showAddPlano && (
+        <ModalPlanejarTreino fichas={dados.fichas} onAdicionar={adicionarAoPlano} onClose={() => setShowAddPlano(false)} />
+      )}
+    </div>
+  );
+}
+
+// Modal: escolher um treino (ficha ou atividade) para o plano de um dia
+function ModalPlanejarTreino({ fichas, onAdicionar, onClose }) {
+  const [tipo, setTipo] = useState("ficha"); // ficha | atividade
+  const [fichaId, setFichaId] = useState(fichas[0]?.id || "");
+  const [ativNome, setAtivNome] = useState(ATIVIDADES_MET[2].nome);
+  const [ativMet, setAtivMet] = useState(ATIVIDADES_MET[2].met);
+  const [duracaoMin, setDuracaoMin] = useState("");
+
+  function escolherAtiv(nome) {
+    const a = ATIVIDADES_MET.find((x) => x.nome === nome);
+    setAtivNome(a.nome); setAtivMet(a.met);
+  }
+  function adicionar() {
+    if (tipo === "ficha") {
+      if (!fichaId) { alert("Escolha uma ficha."); return; }
+      onAdicionar({ tipo: "ficha", fichaId, duracaoMin: duracaoMin ? +duracaoMin : 60 });
+    } else {
+      const dur = parseInt(duracaoMin, 10);
+      if (!dur || dur < 1) { alert("Informe a duração da atividade."); return; }
+      onAdicionar({ tipo: "atividade", nome: ativNome, met: ativMet, duracaoMin: dur });
+    }
+  }
+
+  return (
+    <Modal titulo="Planejar treino" onClose={onClose}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button onClick={() => setTipo("ficha")} style={tipo === "ficha" ? toggleOn : toggleOff}>Ficha de musculação</button>
+        <button onClick={() => setTipo("atividade")} style={tipo === "atividade" ? toggleOn : toggleOff}>Atividade</button>
+      </div>
+
+      {tipo === "ficha" ? (
+        <div>
+          <label style={lbl}>Qual ficha</label>
+          <select value={fichaId} onChange={(e) => setFichaId(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
+            {fichas.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+          </select>
+          <label style={lbl}>Duração prevista (min, opcional)</label>
+          <input type="number" placeholder="60" value={duracaoMin} onChange={(e) => setDuracaoMin(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+        </div>
+      ) : (
+        <div>
+          <label style={lbl}>Atividade</label>
+          <select value={ativNome} onChange={(e) => escolherAtiv(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
+            {ATIVIDADES_MET.map((a) => <option key={a.nome} value={a.nome}>{a.nome}</option>)}
+          </select>
+          <label style={lbl}>Duração prevista (minutos)</label>
+          <input type="number" value={duracaoMin} onChange={(e) => setDuracaoMin(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+        </div>
+      )}
+
+      <button onClick={adicionar} style={btnPrimary}>Adicionar ao plano</button>
+    </Modal>
   );
 }
 
@@ -1508,7 +1917,7 @@ function AbaDashboard({ dados }) {
 // ============================ [APP] =========================================
 export default function App() {
   const [dados, setDados] = useState(() => carregarDados() || ESTADO_INICIAL);
-  const [aba, setAba] = useState("hoje");
+  const [aba, setAba] = useState("resumo");
   useEffect(() => { salvarDados(dados); }, [dados]);
 
   const pesoAtual = useMemo(() => {
@@ -1517,7 +1926,8 @@ export default function App() {
   }, [dados.medidas]);
 
   const abas = [
-    { id: "hoje", nome: "Hoje" },
+    { id: "resumo", nome: "Resumo" },
+    { id: "hoje", nome: "Alimentação" },
     { id: "dashboard", nome: "Balanço" },
     { id: "medidas", nome: "Medidas" },
     { id: "treinos", nome: "Treinos" },
@@ -1542,6 +1952,7 @@ export default function App() {
           </div>
           <div style={{ fontSize: 12, color: MUTED, fontFamily: "'DM Mono', monospace" }}>{fmtData(hoje())}</div>
         </div>
+        {aba === "resumo" && <AbaResumo dados={dados} setDados={setDados} pesoAtual={pesoAtual} irPara={setAba} />}
         {aba === "hoje" && <AbaHoje dados={dados} setDados={setDados} pesoAtual={pesoAtual} />}
         {aba === "dashboard" && <AbaDashboard dados={dados} />}
         {aba === "medidas" && <AbaMedidas dados={dados} setDados={setDados} />}
@@ -1550,7 +1961,7 @@ export default function App() {
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: CARD, borderTop: "1px solid " + BORDER }}>
         <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
           {abas.map((a) => (
-            <button key={a.id} onClick={() => setAba(a.id)} style={{ flex: 1, padding: "14px 0", background: "none", border: "none", cursor: "pointer", color: aba === a.id ? ACCENT : MUTED, fontWeight: 700, fontSize: 13, borderTop: "2px solid " + (aba === a.id ? ACCENT : "transparent") }}>
+            <button key={a.id} onClick={() => setAba(a.id)} style={{ flex: 1, padding: "14px 2px", background: "none", border: "none", cursor: "pointer", color: aba === a.id ? ACCENT : MUTED, fontWeight: 700, fontSize: 11.5, borderTop: "2px solid " + (aba === a.id ? ACCENT : "transparent") }}>
               {a.nome}
             </button>
           ))}
