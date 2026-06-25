@@ -645,6 +645,48 @@ function AbaMedidas({ dados, setDados }) {
     setDados({ ...dados, medidas: dados.medidas.filter((m) => !(m.data === data && m.tipo === tipo)) });
   }
 
+  // ---- EDIÇÃO INLINE de uma medida existente ----
+  // Guarda a chave (data+tipo) da medida aberta para edição, e um rascunho dos
+  // campos enquanto o usuário digita. Salvar grava o rascunho de volta no array.
+  const [editandoMedida, setEditandoMedida] = useState(null); // chave "data|tipo" ou null
+  const [rascunho, setRascunho] = useState({}); // valores em edição
+
+  function abrirEdicao(m) {
+    setEditandoMedida(m.data + "|" + m.tipo);
+    // Copia os valores atuais para o rascunho (como string, para os inputs)
+    setRascunho({
+      peso: m.peso ?? "",
+      percGordura: m.percGordura ?? "",
+      massaMuscular: m.massaMuscular ?? "",
+      gorduraVisceral: m.gorduraVisceral ?? "",
+      cinturaQuadril: m.cinturaQuadril ?? "",
+      agua: m.agua ?? "",
+    });
+  }
+
+  function salvarEdicao(mOriginal) {
+    // Reconstrói a medida com os valores do rascunho (mantendo data, tipo e o
+    // que não é editável aqui, como somaDobras). Campos vazios viram null.
+    const num = (v) => (v === "" || v == null ? null : +v);
+    const atualizada = {
+      ...mOriginal,
+      peso: num(rascunho.peso),
+      percGordura: num(rascunho.percGordura),
+      massaMuscular: num(rascunho.massaMuscular),
+      gorduraVisceral: num(rascunho.gorduraVisceral),
+      cinturaQuadril: num(rascunho.cinturaQuadril),
+      agua: num(rascunho.agua),
+    };
+    setDados({
+      ...dados,
+      medidas: dados.medidas.map((x) =>
+        x.data === mOriginal.data && x.tipo === mOriginal.tipo ? atualizada : x
+      ),
+    });
+    setEditandoMedida(null);
+    alert("Medida de " + fmtData(mOriginal.data) + " atualizada.");
+  }
+
   // ---- formulário InBody ----
   const [inb, setInb] = useState({ peso: "", percGordura: "", massaMuscular: "", gorduraVisceral: "", cinturaQuadril: "", agua: "" });
   function salvarInbody() {
@@ -831,25 +873,63 @@ function AbaMedidas({ dados, setDados }) {
       {medidasOrd.length > 0 && (
         <div style={card}>
           <div style={cardTitle}>MEDIDAS REGISTRADAS ({medidasOrd.length})</div>
-          {[...comNota].reverse().map((m, i) => (
-            <div key={m.data + m.tipo + i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
-              <div>
-                <div style={{ color: TEXT, fontSize: 14, fontWeight: 600 }}>
-                  {fmtData(m.data)}
-                  <span style={{ color: MUTED, fontWeight: 400, marginLeft: 8, fontSize: 12 }}>
-                    {m.tipo === "inbody" ? "InBody" : m.tipo === "dobras3" ? "3 dobras" : "7 dobras"}
-                  </span>
+          {[...comNota].reverse().map((m, i) => {
+            const chave = m.data + "|" + m.tipo;
+            const emEdicao = editandoMedida === chave;
+            // Campos editáveis conforme o tipo de medida
+            const camposInbody = [["peso", "Peso (kg)"], ["percGordura", "% Gordura"], ["massaMuscular", "Músculo (kg)"], ["gorduraVisceral", "Visceral"], ["cinturaQuadril", "Cintura/Quadril"], ["agua", "Água (L)"]];
+            const camposDobras = [["peso", "Peso (kg)"], ["percGordura", "% Gordura"]];
+            const campos = m.tipo === "inbody" ? camposInbody : camposDobras;
+            return (
+              <div key={m.data + m.tipo + i} style={{ padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ color: TEXT, fontSize: 14, fontWeight: 600 }}>
+                      {fmtData(m.data)}
+                      <span style={{ color: MUTED, fontWeight: 400, marginLeft: 8, fontSize: 12 }}>
+                        {m.tipo === "inbody" ? "InBody" : m.tipo === "dobras3" ? "3 dobras" : "7 dobras"}
+                      </span>
+                    </div>
+                    <div style={{ color: MUTED, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
+                      nota {m.nota}
+                      {m.peso != null && " · " + m.peso + "kg"}
+                      {m.percGordura != null && " · " + m.percGordura + "% gord"}
+                      {m.massaMuscular != null && " · " + m.massaMuscular + "kg músc"}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <button onClick={() => (emEdicao ? setEditandoMedida(null) : abrirEdicao(m))} style={{ background: "none", border: "none", color: emEdicao ? ACCENT : MUTED, cursor: "pointer", fontSize: 16, padding: "4px 8px" }} aria-label="Editar medida">
+                      {emEdicao ? "▲" : "✎"}
+                    </button>
+                    <button onClick={() => removerMedida(m.data, m.tipo)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Remover medida">×</button>
+                  </div>
                 </div>
-                <div style={{ color: MUTED, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-                  nota {m.nota}
-                  {m.peso != null && " · " + m.peso + "kg"}
-                  {m.percGordura != null && " · " + m.percGordura + "% gord"}
-                  {m.massaMuscular != null && " · " + m.massaMuscular + "kg músc"}
-                </div>
+
+                {/* Painel de edição inline — aparece ao tocar no ✎ */}
+                {emEdicao && (
+                  <div style={{ background: CARD2, border: "1px solid " + ACCENT, borderRadius: 10, padding: 12, marginTop: 10 }}>
+                    {m.tipo !== "inbody" && (
+                      <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
+                        Dobras: aqui você ajusta peso e % de gordura diretamente. Para recalcular pelas dobras em mm, registre uma nova medida.
+                      </div>
+                    )}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      {campos.map(([k, l]) => (
+                        <div key={k}>
+                          <label style={lbl}>{l}</label>
+                          <input type="number" step="0.1" value={rascunho[k]} onChange={(e) => setRascunho({ ...rascunho, [k]: e.target.value })} style={inputSm} />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                      <button onClick={() => salvarEdicao(m)} style={{ ...btnPrimarySm, flex: 1 }}>Salvar alterações</button>
+                      <button onClick={() => setEditandoMedida(null)} style={btnGhost}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <button onClick={() => removerMedida(m.data, m.tipo)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Remover medida">×</button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
