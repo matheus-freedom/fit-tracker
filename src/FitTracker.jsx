@@ -592,15 +592,27 @@ const lbl = { fontSize: 11, color: MUTED, display: "block", marginBottom: 4 };
 function AbaMedidas({ dados, setDados }) {
   const [tipoForm, setTipoForm] = useState("inbody"); // inbody | dobras3 | dobras7
 
+  // Data da medição — começa em hoje, mas pode ser uma data passada (histórico)
+  const [dataMedida, setDataMedida] = useState(hoje());
+
   const medidasOrd = useMemo(() => [...dados.medidas].sort((a, b) => a.data.localeCompare(b.data)), [dados.medidas]);
   const comNota = medidasOrd.map((m) => ({ ...m, nota: calcularNota(m) }));
   const ultima = comNota[comNota.length - 1];
+
+  // Avisa se já existe medida na data escolhida (será substituída ao salvar)
+  const jaExisteNaData = dados.medidas.some((m) => m.data === dataMedida);
+
+  // Remove uma medida específica (útil ao corrigir lançamentos de histórico)
+  function removerMedida(data, tipo) {
+    if (!confirm("Remover a medida de " + fmtData(data) + "?")) return;
+    setDados({ ...dados, medidas: dados.medidas.filter((m) => !(m.data === data && m.tipo === tipo)) });
+  }
 
   // ---- formulário InBody ----
   const [inb, setInb] = useState({ peso: "", percGordura: "", massaMuscular: "", gorduraVisceral: "", cinturaQuadril: "", agua: "" });
   function salvarInbody() {
     if (!inb.peso) { alert("Peso é obrigatório."); return; }
-    const nova = { data: hoje(), tipo: "inbody", peso: +inb.peso,
+    const nova = { data: dataMedida, tipo: "inbody", peso: +inb.peso,
       percGordura: inb.percGordura ? +inb.percGordura : null,
       massaMuscular: inb.massaMuscular ? +inb.massaMuscular : null,
       gorduraVisceral: inb.gorduraVisceral ? +inb.gorduraVisceral : null,
@@ -608,6 +620,7 @@ function AbaMedidas({ dados, setDados }) {
       agua: inb.agua ? +inb.agua : null };
     setDados({ ...dados, medidas: [...dados.medidas.filter((m) => m.data !== nova.data), nova] });
     setInb({ peso: "", percGordura: "", massaMuscular: "", gorduraVisceral: "", cinturaQuadril: "", agua: "" });
+    alert("Medida InBody salva em " + fmtData(dataMedida) + ".");
   }
 
   // ---- formulário dobras 3 ----
@@ -617,9 +630,10 @@ function AbaMedidas({ dados, setDados }) {
     if (!peitoral || !abdominal || !coxa) { alert("Preencha as 3 dobras."); return; }
     const soma = +peitoral + +abdominal + +coxa;
     const pg = gorduraPor3Dobras(soma, PERFIL.idade);
-    const nova = { data: hoje(), tipo: "dobras3", peso: d3.peso ? +d3.peso : null, percGordura: pg, somaDobras: soma, gorduraVisceral: null, massaMuscular: null, cinturaQuadril: null };
+    const nova = { data: dataMedida, tipo: "dobras3", peso: d3.peso ? +d3.peso : null, percGordura: pg, somaDobras: soma, gorduraVisceral: null, massaMuscular: null, cinturaQuadril: null };
     setDados({ ...dados, medidas: [...dados.medidas.filter((m) => m.data !== nova.data), nova] });
     setD3({ peso: "", peitoral: "", abdominal: "", coxa: "" });
+    alert("Medida de 3 dobras salva em " + fmtData(dataMedida) + ". Gordura estimada: " + pg + "%.");
   }
 
   // ---- formulário dobras 7 ----
@@ -630,9 +644,10 @@ function AbaMedidas({ dados, setDados }) {
     if (vals.some((v) => !v)) { alert("Preencha as 7 dobras."); return; }
     const soma = vals.reduce((a, v) => a + +v, 0);
     const pg = gorduraPor7Dobras(soma, PERFIL.idade);
-    const nova = { data: hoje(), tipo: "dobras7", peso: d7.peso ? +d7.peso : null, percGordura: pg, somaDobras: soma, gorduraVisceral: null, massaMuscular: null, cinturaQuadril: null };
+    const nova = { data: dataMedida, tipo: "dobras7", peso: d7.peso ? +d7.peso : null, percGordura: pg, somaDobras: soma, gorduraVisceral: null, massaMuscular: null, cinturaQuadril: null };
     setDados({ ...dados, medidas: [...dados.medidas.filter((m) => m.data !== nova.data), nova] });
     setD7({ peso: "" });
+    alert("Medida de 7 dobras salva em " + fmtData(dataMedida) + ". Gordura estimada: " + pg + "%.");
   }
 
   const serie = (campo) => comNota.filter((m) => m[campo] != null).map((m) => m[campo]);
@@ -667,6 +682,30 @@ function AbaMedidas({ dados, setDados }) {
 
       <div style={card}>
         <div style={cardTitle}>NOVA MEDIDA</div>
+
+        {/* Seletor de data da medição — permite lançar bioimpedâncias/dobras antigas */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Data da medição</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setDataMedida(somarDias(dataMedida, -1))} style={{ ...btnSec, padding: "10px 14px", fontSize: 18 }} aria-label="Dia anterior">‹</button>
+            <div style={{ flex: 1, textAlign: "center", position: "relative", background: CARD2, border: "1px solid " + BORDER, borderRadius: 10, padding: "10px 0" }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: dataMedida === hoje() ? ACCENT : TEXT }}>
+                {dataMedida === hoje() ? "Hoje" : fmtData(dataMedida)}
+              </span>
+              <input type="date" value={dataMedida} max={hoje()} onChange={(e) => { if (e.target.value) setDataMedida(e.target.value); }}
+                style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", border: "none" }} aria-label="Escolher data" />
+            </div>
+            <button onClick={() => { if (dataMedida !== hoje()) setDataMedida(somarDias(dataMedida, 1)); }} disabled={dataMedida === hoje()}
+              style={{ ...btnSec, padding: "10px 14px", fontSize: 18, opacity: dataMedida === hoje() ? 0.35 : 1 }} aria-label="Próximo dia">›</button>
+          </div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Toque no centro para abrir o calendário e lançar uma medida antiga.</div>
+          {jaExisteNaData && (
+            <div style={{ fontSize: 12, color: ORANGE, marginTop: 6 }}>
+              ⚠ Já existe uma medida nesta data. Salvar vai substituí-la.
+            </div>
+          )}
+        </div>
+
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
           <button onClick={() => setTipoForm("inbody")} style={tipoForm === "inbody" ? toggleOn : toggleOff}>InBody</button>
           <button onClick={() => setTipoForm("dobras3")} style={tipoForm === "dobras3" ? toggleOn : toggleOff}>3 dobras</button>
@@ -711,6 +750,32 @@ function AbaMedidas({ dados, setDados }) {
           </div>
         )}
       </div>
+
+      {/* HISTÓRICO DE MEDIDAS — lista todas, com opção de remover */}
+      {medidasOrd.length > 0 && (
+        <div style={card}>
+          <div style={cardTitle}>MEDIDAS REGISTRADAS ({medidasOrd.length})</div>
+          {[...comNota].reverse().map((m, i) => (
+            <div key={m.data + m.tipo + i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
+              <div>
+                <div style={{ color: TEXT, fontSize: 14, fontWeight: 600 }}>
+                  {fmtData(m.data)}
+                  <span style={{ color: MUTED, fontWeight: 400, marginLeft: 8, fontSize: 12 }}>
+                    {m.tipo === "inbody" ? "InBody" : m.tipo === "dobras3" ? "3 dobras" : "7 dobras"}
+                  </span>
+                </div>
+                <div style={{ color: MUTED, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
+                  nota {m.nota}
+                  {m.peso != null && " · " + m.peso + "kg"}
+                  {m.percGordura != null && " · " + m.percGordura + "% gord"}
+                  {m.massaMuscular != null && " · " + m.massaMuscular + "kg músc"}
+                </div>
+              </div>
+              <button onClick={() => removerMedida(m.data, m.tipo)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Remover medida">×</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
