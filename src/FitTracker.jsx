@@ -789,11 +789,34 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
   const [kcalSW, setKcalSW] = useState("");
   const [fonteKcal, setFonteKcal] = useState("formula");
 
+  // Cronômetro: guardamos o INSTANTE de início e calculamos o tempo decorrido
+  // pela diferença com "agora". Isso é robusto: mesmo se a tela do celular
+  // dormir durante o descanso entre séries, ao voltar o tempo está correto
+  // (um contador que apenas incrementa atrasaria nessas situações).
+  const [agora, setAgora] = useState(Date.now());
+  useEffect(() => {
+    if (!treinoAtivo) return;
+    const id = setInterval(() => setAgora(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [treinoAtivo]);
+
+  // Segundos decorridos desde o início do treino ativo
+  const segDecorridos = treinoAtivo ? Math.floor((agora - treinoAtivo.inicio) / 1000) : 0;
+  // Formata como HH:MM:SS ou MM:SS
+  function fmtCrono(seg) {
+    const h = Math.floor(seg / 3600);
+    const m = Math.floor((seg % 3600) / 60);
+    const s = seg % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? h + ":" + pad(m) + ":" + pad(s) : pad(m) + ":" + pad(s);
+  }
+
   function iniciar(fichaId) {
     const ficha = dados.fichas.find((f) => f.id === fichaId);
     const series = {};
     ficha.exercicios.forEach((ex, i) => { series[i] = Array.from({ length: ex.series }, () => ({ reps: ex.repsAlvo, carga: "" })); });
-    setTreinoAtivo({ fichaId, series });
+    setAgora(Date.now());
+    setTreinoAtivo({ fichaId, series, inicio: Date.now() }); // registra o horário de início
   }
   function atualizarSerie(ei, si, campo, val) {
     const ns = { ...treinoAtivo.series };
@@ -801,9 +824,12 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
     setTreinoAtivo({ ...treinoAtivo, series: ns });
   }
   function finalizar() {
-    if (!duracao) { alert("Informe a duração."); return; }
-    const kcal = (fonteKcal === "smartwatch" && kcalSW) ? +kcalSW : calcularCaloriasTreino(intensidade, pesoAtual, +duracao);
-    const reg = { data: hoje(), fichaId: treinoAtivo.fichaId, duracaoMin: +duracao, kcal, fonteKcal, series: treinoAtivo.series };
+    // Duração: usa a cronometrada (em minutos, arredondada) a menos que o
+    // usuário tenha digitado uma duração manual no campo (que tem prioridade).
+    const minCronometrados = Math.max(1, Math.round(segDecorridos / 60));
+    const duracaoFinal = duracao ? +duracao : minCronometrados;
+    const kcal = (fonteKcal === "smartwatch" && kcalSW) ? +kcalSW : calcularCaloriasTreino(intensidade, pesoAtual, duracaoFinal);
+    const reg = { data: hoje(), fichaId: treinoAtivo.fichaId, duracaoMin: duracaoFinal, kcal, fonteKcal, series: treinoAtivo.series };
     setDados({ ...dados, historicoTreinos: [reg, ...dados.historicoTreinos] });
     setTreinoAtivo(null); setDuracao(""); setKcalSW("");
   }
@@ -811,12 +837,18 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
   // ---- treino em andamento ----
   if (treinoAtivo) {
     const ficha = dados.fichas.find((f) => f.id === treinoAtivo.fichaId);
-    const kcalEst = duracao ? calcularCaloriasTreino(intensidade, pesoAtual, +duracao) : 0;
+    const minParaCalculo = duracao ? +duracao : Math.max(1, Math.round(segDecorridos / 60));
+    const kcalEst = calcularCaloriasTreino(intensidade, pesoAtual, minParaCalculo);
     return (
       <div>
-        <div style={{ ...card, borderColor: ACCENT }}>
+        <div style={{ ...card, borderColor: ACCENT, textAlign: "center" }}>
           <div style={{ fontSize: 13, color: ACCENT, fontWeight: 700, marginBottom: 4 }}>TREINO EM ANDAMENTO</div>
-          <div style={{ fontSize: 18, color: TEXT, fontWeight: 700 }}>{ficha.nome}</div>
+          <div style={{ fontSize: 16, color: TEXT, fontWeight: 700, marginBottom: 12 }}>{ficha.nome}</div>
+          {/* Cronômetro grande */}
+          <div style={{ fontSize: 48, fontWeight: 900, color: ACCENT, fontFamily: "'DM Mono', monospace", lineHeight: 1, letterSpacing: 1 }}>
+            {fmtCrono(segDecorridos)}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>tempo de treino</div>
         </div>
         {ficha.exercicios.map((ex, ei) => (
           <div key={ei} style={{ ...card, padding: 16, marginBottom: 12 }}>
@@ -835,8 +867,14 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
         ))}
         <div style={card}>
           <div style={cardTitle}>FINALIZAR — CALORIAS GASTAS</div>
-          <label style={lbl}>Duração (minutos)</label>
-          <input type="number" value={duracao} onChange={(e) => setDuracao(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+          <div style={{ background: CARD2, borderRadius: 10, padding: 12, marginBottom: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: MUTED }}>Duração cronometrada</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: ACCENT, fontFamily: "'DM Mono', monospace" }}>
+              {Math.max(1, Math.round(segDecorridos / 60))} min
+            </div>
+          </div>
+          <label style={lbl}>Ajustar duração manualmente (opcional)</label>
+          <input type="number" placeholder={"deixe vazio para usar " + Math.max(1, Math.round(segDecorridos / 60)) + " min"} value={duracao} onChange={(e) => setDuracao(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <button onClick={() => setFonteKcal("formula")} style={fonteKcal === "formula" ? toggleOn : toggleOff}>Estimar (fórmula)</button>
             <button onClick={() => setFonteKcal("smartwatch")} style={fonteKcal === "smartwatch" ? toggleOn : toggleOff}>Smartwatch</button>
