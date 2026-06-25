@@ -27,6 +27,21 @@ const ALIMENTOS_BASE = [{"nome": "Abacate", "cat": "Fruta", "kcal": 96, "p": 1.2
 // ============================ [PERFIL] ======================================
 const PERFIL = { nome: "Matheus", altura_cm: 174, idade: 31, sexo: "M" };
 
+/*
+ * TMB — Taxa Metabólica Basal (fórmula Mifflin-St Jeor)
+ * É quanto o corpo gasta em REPOUSO ABSOLUTO, só para existir. NÃO é a meta
+ * de calorias do dia: você gasta muito mais que isso treinando e se movendo.
+ * Calculada a partir do peso atual (passado como argumento).
+ */
+function calcularTMB(pesoKg) {
+  // Homem: (10 × peso) + (6,25 × altura) − (5 × idade) + 5
+  return Math.round(10 * pesoKg + 6.25 * PERFIL.altura_cm - 5 * PERFIL.idade + 5);
+}
+// TMB medida pela InBody mais recente (valor real do aparelho, fixo)
+const TMB_INBODY = 1699;
+
+// Macros de proteína/carbo/gordura (a meta de CALORIAS agora é editável e
+// salva em dados.metaCalorias; estes ficam como referência fixa).
 const META_MACROS = { calorias: 2250, proteina: 183, carbo: 235, gordura: 60 };
 
 const REFEICOES_PLANO = [
@@ -141,6 +156,7 @@ const ESTADO_INICIAL = {
   diario: {},
   refeicoesSalvas: [],
   alimentosCustom: [],
+  metaCalorias: TMB_INBODY, // padrão = TMB da InBody (editável na aba Medidas)
   medidas: [
     { data: "2026-06-15", tipo: "inbody", peso: 83.4, percGordura: 26.2, massaMuscular: 35.1, gorduraVisceral: 9, cinturaQuadril: 0.92, agua: 45.1 },
   ],
@@ -235,6 +251,8 @@ function AbaHoje({ dados, setDados }) {
   const [d, setD] = useState(hoje());
   const diaAtual = dados.diario[d] || { itens: [], refeicoesFeitas: {} };
   const ehHoje = d === hoje();
+  // Meta de calorias efetiva (editável e salva; cai para TMB se não definida)
+  const metaCal = dados.metaCalorias || TMB_INBODY;
 
   // Base completa = base fixa + alimentos custom do usuário
   const baseCompleta = useMemo(
@@ -353,7 +371,7 @@ function AbaHoje({ dados, setDados }) {
       {/* RESUMO */}
       <div style={card}>
         <div style={cardTitle}>{ehHoje ? "RESUMO DE HOJE" : "RESUMO DO DIA"}</div>
-        <Barra atual={totais.kcal} meta={META_MACROS.calorias} label="Calorias (kcal)" cor={ACCENT} />
+        <Barra atual={totais.kcal} meta={metaCal} label="Calorias (kcal)" cor={ACCENT} />
         <Barra atual={totais.p} meta={META_MACROS.proteina} label="Proteína (g)" cor={BLUE} />
         <Barra atual={totais.c} meta={META_MACROS.carbo} label="Carboidrato (g)" cor={ORANGE} />
         <Barra atual={totais.g} meta={META_MACROS.gordura} label="Gordura (g)" cor={PINK} />
@@ -599,6 +617,25 @@ function AbaMedidas({ dados, setDados }) {
   const comNota = medidasOrd.map((m) => ({ ...m, nota: calcularNota(m) }));
   const ultima = comNota[comNota.length - 1];
 
+  // Peso mais recente, para calcular a TMB pela fórmula
+  const pesoAtual = useMemo(() => {
+    const ms = [...dados.medidas].filter((m) => m.peso != null).sort((a, b) => b.data.localeCompare(a.data));
+    return ms[0]?.peso || 83;
+  }, [dados.medidas]);
+  const tmbFormula = calcularTMB(pesoAtual);
+
+  // Meta de calorias editável (salva em dados.metaCalorias)
+  const metaCal = dados.metaCalorias || TMB_INBODY;
+  const [metaInput, setMetaInput] = useState(String(metaCal));
+  function salvarMeta() {
+    const v = parseInt(metaInput, 10);
+    if (!v || v < 800) { alert("Informe uma meta válida (mínimo 800 kcal)."); return; }
+    setDados({ ...dados, metaCalorias: v });
+    alert("Meta de calorias atualizada para " + v + " kcal.");
+  }
+  // Limiar de segurança: abaixo disso, mostramos aviso (não bloqueia)
+  const metaAbaixoDoSeguro = metaCal < tmbFormula;
+
   // Avisa se já existe medida na data escolhida (será substituída ao salvar)
   const jaExisteNaData = dados.medidas.some((m) => m.data === dataMedida);
 
@@ -654,6 +691,45 @@ function AbaMedidas({ dados, setDados }) {
 
   return (
     <div>
+      {/* TMB E META DE CALORIAS */}
+      <div style={card}>
+        <div style={cardTitle}>METABOLISMO E META</div>
+
+        {/* TMB: os dois valores, com explicação */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div style={{ background: CARD2, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 11, color: MUTED }}>TMB (fórmula)</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: TEXT, fontFamily: "'DM Mono', monospace" }}>{tmbFormula}</div>
+            <div style={{ fontSize: 10, color: MUTED }}>kcal · do seu peso atual</div>
+          </div>
+          <div style={{ background: CARD2, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 11, color: MUTED }}>TMB (InBody)</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: TEXT, fontFamily: "'DM Mono', monospace" }}>{TMB_INBODY}</div>
+            <div style={{ fontSize: 10, color: MUTED }}>kcal · medida real</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: MUTED, marginBottom: 16, lineHeight: 1.5 }}>
+          A TMB é o gasto do corpo em repouso absoluto — não inclui treinos nem o dia a dia. Por isso ela costuma ser bem menor que o gasto total.
+        </div>
+
+        {/* Meta de calorias editável */}
+        <label style={lbl}>Meta de calorias do dia</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="number" value={metaInput} onChange={(e) => setMetaInput(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={salvarMeta} style={btnPrimarySm}>Salvar</button>
+        </div>
+
+        {/* Aviso de segurança quando a meta está abaixo da TMB */}
+        {metaAbaixoDoSeguro && (
+          <div style={{ marginTop: 12, padding: 12, background: CARD2, border: "1px solid " + ORANGE, borderRadius: 10 }}>
+            <div style={{ color: ORANGE, fontWeight: 700, fontSize: 12, marginBottom: 4 }}>⚠ Meta abaixo da sua TMB</div>
+            <div style={{ color: MUTED, fontSize: 12, lineHeight: 1.5 }}>
+              Comer menos que o gasto em repouso, com o volume de treino que você faz, gera um déficit grande e acelera a perda de músculo. Funciona para perder peso rápido, mas vigie sua massa magra nas próximas medições.
+            </div>
+          </div>
+        )}
+      </div>
+
       {ultima && (
         <div style={{ background: "linear-gradient(135deg," + CARD + "," + CARD2 + ")", border: "1px solid " + BORDER, borderRadius: 16, padding: 22, marginBottom: 16, textAlign: "center" }}>
           <div style={{ fontSize: 12, letterSpacing: 1.5, color: MUTED, textTransform: "uppercase", fontWeight: 700 }}>Nota do físico</div>
@@ -992,6 +1068,7 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
  */
 function AbaDashboard({ dados }) {
   const d = hoje();
+  const metaCal = dados.metaCalorias || TMB_INBODY;
 
   function totaisDoDia(data) {
     const dia = dados.diario[data];
@@ -1006,7 +1083,7 @@ function AbaDashboard({ dados }) {
   function balancoDia(data) {
     const { consumido, gastoTreino } = totaisDoDia(data);
     return {
-      kcal: consumido.kcal - (META_MACROS.calorias + gastoTreino),
+      kcal: consumido.kcal - (metaCal + gastoTreino),
       p: consumido.p - META_MACROS.proteina,
       c: consumido.c - META_MACROS.carbo,
       g: consumido.g - META_MACROS.gordura,
@@ -1079,7 +1156,7 @@ function AbaDashboard({ dados }) {
       <div style={{ ...card, background: "linear-gradient(135deg," + CARD + "," + CARD2 + ")" }}>
         <div style={cardTitle}>COMO LER ESTE PAINEL</div>
         <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-          O balanço compara o que você comeu com sua meta ({META_MACROS.calorias} kcal) mais o gasto nos treinos.
+          O balanço compara o que você comeu com sua meta ({metaCal} kcal) mais o gasto nos treinos.
           Número <span style={{ color: ACCENT, fontWeight: 700 }}>negativo = déficit</span> (caminho para perder gordura).
           Número <span style={{ color: ORANGE, fontWeight: 700 }}>positivo = superávit</span>.
         </div>
