@@ -44,6 +44,29 @@ const TMB_INBODY = 1699;
 // salva em dados.metaCalorias; estes ficam como referência fixa).
 const META_MACROS = { calorias: 2250, proteina: 183, carbo: 235, gordura: 60 };
 
+/*
+ * LÍQUIDOS — quais alimentos são medidos em ml (não em gramas).
+ * Usamos a categoria "Bebida" + os leites (que estão em "Laticínio"). Tratamos
+ * 1 ml = 1 g para a contagem de calorias: a diferença real de densidade é de
+ * 3-5%, irrelevante para o objetivo e padrão em apps de dieta. Iogurtes e whey
+ * NÃO entram aqui de propósito — são consumidos por peso (pote, scoop).
+ */
+function ehLiquido(alimento) {
+  if (alimento.cat === "Bebida") return true;
+  if (/^leite/i.test(alimento.nome)) return true; // "Leite integral", "Leite desnatado"...
+  return false;
+}
+
+/*
+ * META DIÁRIA DE ÁGUA — calculada pelo PESO corporal (35 ml por kg), que é o
+ * padrão fisiológico. Atenção: a "água corporal" da InBody (ex: 45,1L) mede a
+ * água que já existe no corpo — NÃO é quanto se deve beber. São coisas
+ * diferentes. Por isso usamos o peso, não o dado de água da bioimpedância.
+ */
+function calcularMetaAgua(pesoKg) {
+  return Math.round(35 * pesoKg); // em ml
+}
+
 const REFEICOES_PLANO = [
   { id: "cafe", nome: "Café da manhã (7h40)", obs: "Antes do treino — protege o músculo" },
   { id: "pos", nome: "Pós-treino (~11h30)", obs: "Whey + banana, janela de absorção" },
@@ -157,6 +180,8 @@ const ESTADO_INICIAL = {
   refeicoesSalvas: [],
   alimentosCustom: [],
   metaCalorias: TMB_INBODY, // padrão = TMB da InBody (editável na aba Medidas)
+  metaAgua: null, // ml/dia; null = calcula automático pelo peso (35 ml/kg)
+  aguaPorDia: {}, // { "2026-06-25": 1500 } — ml de água bebidos em cada dia
   medidas: [
     { data: "2026-06-15", tipo: "inbody", peso: 83.4, percGordura: 26.2, massaMuscular: 35.1, gorduraVisceral: 9, cinturaQuadril: 0.92, agua: 45.1 },
   ],
@@ -246,13 +271,26 @@ function MiniGrafico({ pontos, cor, label, valorAtual }) {
 }
 
 // ============================ [UI-HOJE] =====================================
-function AbaHoje({ dados, setDados }) {
+function AbaHoje({ dados, setDados, pesoAtual }) {
   // Data selecionada — começa em hoje, mas o usuário pode navegar para dias anteriores
   const [d, setD] = useState(hoje());
   const diaAtual = dados.diario[d] || { itens: [], refeicoesFeitas: {} };
   const ehHoje = d === hoje();
   // Meta de calorias efetiva (editável e salva; cai para TMB se não definida)
   const metaCal = dados.metaCalorias || TMB_INBODY;
+
+  // --- ÁGUA ---
+  // Meta: usa a manual (se definida) ou calcula 35 ml/kg do peso atual
+  const metaAgua = dados.metaAgua || calcularMetaAgua(pesoAtual);
+  // Quanto já bebeu no dia selecionado
+  const aguaHoje = (dados.aguaPorDia && dados.aguaPorDia[d]) || 0;
+  function addAgua(ml) {
+    const novo = Math.max(0, aguaHoje + ml); // nunca abaixo de zero
+    setDados({ ...dados, aguaPorDia: { ...dados.aguaPorDia, [d]: novo } });
+  }
+  function zerarAgua() {
+    setDados({ ...dados, aguaPorDia: { ...dados.aguaPorDia, [d]: 0 } });
+  }
 
   // Base completa = base fixa + alimentos custom do usuário
   const baseCompleta = useMemo(
@@ -303,7 +341,8 @@ function AbaHoje({ dados, setDados }) {
   function addItem() {
     if (!selecionado) return;
     const m = calcularItem(selecionado);
-    const desc = modoQtd === "gramas" ? gramas + "g" : (qtdPorcao + "× " + selecionado.porcoes[porcaoIdx].rotulo);
+    const unidade = ehLiquido(selecionado) ? "ml" : "g";
+    const desc = modoQtd === "gramas" ? gramas + unidade : (qtdPorcao + "× " + selecionado.porcoes[porcaoIdx].rotulo);
     const item = { id: Date.now(), alimento: selecionado.nome, desc, refeicao: refeicaoSel, ...m };
     const novoDia = { ...diaAtual, itens: [...diaAtual.itens, item] };
     setDados({ ...dados, diario: { ...dados.diario, [d]: novoDia } });
@@ -377,6 +416,17 @@ function AbaHoje({ dados, setDados }) {
         <Barra atual={totais.g} meta={META_MACROS.gordura} label="Gordura (g)" cor={PINK} />
       </div>
 
+      {/* ÁGUA */}
+      <SecaoAgua
+        aguaHoje={aguaHoje}
+        metaAgua={metaAgua}
+        metaManual={dados.metaAgua}
+        addAgua={addAgua}
+        zerarAgua={zerarAgua}
+        onSalvarMeta={(v) => setDados({ ...dados, metaAgua: v })}
+        pesoAtual={pesoAtual}
+      />
+
       {/* CHECKLIST REFEIÇÕES */}
       <div style={card}>
         <div style={cardTitle}>REFEIÇÕES DO PLANO</div>
@@ -438,7 +488,7 @@ function AbaHoje({ dados, setDados }) {
             {filtrados.map((a) => (
               <div key={a.nome} onClick={() => { setSelecionado(a); setModoQtd(a.porcoes.length ? "porcao" : "gramas"); setPorcaoIdx(0); }} style={{ padding: "10px 12px", borderBottom: "1px solid " + BORDER, cursor: "pointer", display: "flex", justifyContent: "space-between" }}>
                 <span style={{ color: TEXT, fontSize: 14 }}>{a.nome}</span>
-                <span style={{ color: MUTED, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>{a.kcal} kcal/100g</span>
+                <span style={{ color: MUTED, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>{a.kcal} kcal/100{ehLiquido(a) ? "ml" : "g"}</span>
               </div>
             ))}
             {/* opção de adicionar novo alimento ao fim da lista */}
@@ -459,7 +509,7 @@ function AbaHoje({ dados, setDados }) {
             {/* toggle gramas/porção só se houver porções */}
             {selecionado.porcoes.length > 0 && (
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <button onClick={() => setModoQtd("gramas")} style={modoQtd === "gramas" ? toggleOn : toggleOff}>Gramas</button>
+                <button onClick={() => setModoQtd("gramas")} style={modoQtd === "gramas" ? toggleOn : toggleOff}>{ehLiquido(selecionado) ? "Mililitros" : "Gramas"}</button>
                 <button onClick={() => setModoQtd("porcao")} style={modoQtd === "porcao" ? toggleOn : toggleOff}>Porção</button>
               </div>
             )}
@@ -467,7 +517,7 @@ function AbaHoje({ dados, setDados }) {
             {modoQtd === "gramas" ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input type="number" min="1" value={gramas} onChange={(e) => setGramas(+e.target.value)} style={{ ...inputSm, width: 100 }} />
-                <span style={{ color: MUTED, fontSize: 14 }}>gramas</span>
+                <span style={{ color: MUTED, fontSize: 14 }}>{ehLiquido(selecionado) ? "mililitros" : "gramas"}</span>
               </div>
             ) : (
               <div style={{ display: "flex", gap: 8 }}>
@@ -518,6 +568,99 @@ function AbaHoje({ dados, setDados }) {
 
 const toggleOn = { flex: 1, padding: 8, background: ACCENT, border: "none", borderRadius: 8, color: BG, fontWeight: 700, fontSize: 13, cursor: "pointer" };
 const toggleOff = { flex: 1, padding: 8, background: BG, border: "1px solid " + BORDER, borderRadius: 8, color: MUTED, fontWeight: 700, fontSize: 13, cursor: "pointer" };
+
+/*
+ * SEÇÃO DE ÁGUA — registro do dia com botões rápidos + campo manual, barra de
+ * progresso e meta editável (padrão 35 ml/kg do peso).
+ */
+function SecaoAgua({ aguaHoje, metaAgua, metaManual, addAgua, zerarAgua, onSalvarMeta, pesoAtual }) {
+  const [manual, setManual] = useState("");
+  const [editandoMeta, setEditandoMeta] = useState(false);
+  const [metaInput, setMetaInput] = useState(String(metaAgua));
+
+  const pct = metaAgua > 0 ? Math.min(100, Math.round((aguaHoje / metaAgua) * 100)) : 0;
+  const litros = (ml) => (ml / 1000).toFixed(ml % 1000 === 0 ? 0 : 1).replace(".", ",");
+  const bateu = aguaHoje >= metaAgua;
+
+  function adicionarManual() {
+    const v = parseInt(manual, 10);
+    if (!v || v <= 0) return;
+    addAgua(v);
+    setManual("");
+  }
+  function salvarMeta() {
+    const v = parseInt(metaInput, 10);
+    if (!v || v < 500) { alert("Informe uma meta válida (mínimo 500 ml)."); return; }
+    onSalvarMeta(v);
+    setEditandoMeta(false);
+  }
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <span style={cardTitle}>💧 ÁGUA</span>
+        <button onClick={() => { setMetaInput(String(metaAgua)); setEditandoMeta(!editandoMeta); }} style={btnGhost}>
+          {editandoMeta ? "Fechar" : "Ajustar meta"}
+        </button>
+      </div>
+
+      {/* Progresso */}
+      <div style={{ textAlign: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 32, fontWeight: 900, color: bateu ? ACCENT : BLUE, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>
+          {litros(aguaHoje)}<span style={{ fontSize: 18, color: MUTED }}> / {litros(metaAgua)} L</span>
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+          {bateu ? "✓ meta batida!" : (metaAgua - aguaHoje) + " ml restantes"}
+        </div>
+      </div>
+
+      {/* Barra de progresso */}
+      <div style={{ height: 10, background: CARD2, borderRadius: 99, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ width: pct + "%", height: "100%", background: bateu ? ACCENT : BLUE, borderRadius: 99, transition: "width .3s" }} />
+      </div>
+
+      {/* Botões rápidos */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {[["+250", 250], ["+500", 500], ["+1L", 1000]].map(([rotulo, ml]) => (
+          <button key={ml} onClick={() => addAgua(ml)} style={{ flex: 1, padding: "12px 0", background: CARD2, border: "1px solid " + BLUE, borderRadius: 10, color: BLUE, fontWeight: 800, fontSize: 14, cursor: "pointer" }}>
+            {rotulo}
+          </button>
+        ))}
+      </div>
+
+      {/* Campo manual + desfazer */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input type="number" min="1" placeholder="ml" value={manual} onChange={(e) => setManual(e.target.value)} style={{ ...inputSm, flex: 1 }} />
+        <button onClick={adicionarManual} style={btnPrimarySm}>Adicionar</button>
+        {aguaHoje > 0 && (
+          <button onClick={() => addAgua(-250)} style={btnGhost} aria-label="Desfazer 250ml">−250</button>
+        )}
+      </div>
+
+      {aguaHoje > 0 && (
+        <button onClick={zerarAgua} style={{ ...btnGhost, width: "100%", marginTop: 8 }}>Zerar o dia</button>
+      )}
+
+      {/* Editor de meta */}
+      {editandoMeta && (
+        <div style={{ background: CARD2, border: "1px solid " + BORDER, borderRadius: 10, padding: 12, marginTop: 12 }}>
+          <label style={lbl}>Meta diária de água (ml)</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="number" value={metaInput} onChange={(e) => setMetaInput(e.target.value)} style={{ ...inputSm, flex: 1 }} />
+            <button onClick={salvarMeta} style={btnPrimarySm}>Salvar</button>
+            {metaManual && (
+              <button onClick={() => { onSalvarMeta(null); setEditandoMeta(false); }} style={btnGhost}>Auto</button>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+            Sugestão automática: {calcularMetaAgua(pesoAtual)} ml (35 ml por kg do seu peso de {pesoAtual} kg). A água da bioimpedância mede a água que já está no corpo, então não serve para definir quanto beber — por isso usamos o peso.
+            {metaManual ? " Você está usando uma meta manual; toque em \"Auto\" para voltar ao cálculo." : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Modal: adicionar alimento custom
 function ModalCustom({ dados, setDados, onClose }) {
@@ -1285,7 +1428,7 @@ export default function App() {
           </div>
           <div style={{ fontSize: 12, color: MUTED, fontFamily: "'DM Mono', monospace" }}>{fmtData(hoje())}</div>
         </div>
-        {aba === "hoje" && <AbaHoje dados={dados} setDados={setDados} />}
+        {aba === "hoje" && <AbaHoje dados={dados} setDados={setDados} pesoAtual={pesoAtual} />}
         {aba === "dashboard" && <AbaDashboard dados={dados} />}
         {aba === "medidas" && <AbaMedidas dados={dados} setDados={setDados} />}
         {aba === "treinos" && <AbaTreinos dados={dados} setDados={setDados} pesoAtual={pesoAtual} />}
