@@ -270,6 +270,49 @@ function MiniGrafico({ pontos, cor, label, valorAtual }) {
   );
 }
 
+/*
+ * SELETOR DE DATA reutilizável (usado na aba Hoje e na aba Medidas).
+ * Setas ‹ › para ajuste fino de 1 dia + um botão de CALENDÁRIO explícito para
+ * saltos grandes (ex: voltar 60 dias). O botão de calendário é visível e óbvio
+ * — antes o calendário ficava num campo invisível e ninguém o descobria.
+ * Props: value (AAAA-MM-DD), onChange (recebe nova data), rotuloHoje liga/desliga
+ * o texto "Hoje", e maxHoje impede escolher datas futuras.
+ */
+function SeletorData({ value, onChange, rotuloHoje = true, maxHoje = true }) {
+  const ehHoje = value === hoje();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button onClick={() => onChange(somarDias(value, -1))} style={{ ...btnSec, padding: "12px 14px", fontSize: 18 }} aria-label="Dia anterior">‹</button>
+
+      <div style={{ flex: 1, textAlign: "center" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: ehHoje && rotuloHoje ? ACCENT : TEXT }}>
+          {ehHoje && rotuloHoje ? "Hoje" : fmtData(value)}
+        </div>
+      </div>
+
+      {/* Botão de calendário EXPLÍCITO — abre o seletor nativo para saltos grandes */}
+      <div style={{ position: "relative" }}>
+        <button style={{ ...btnSec, padding: "12px 14px", fontSize: 18, borderColor: ACCENT, color: ACCENT }} aria-label="Abrir calendário">📅</button>
+        <input
+          type="date"
+          value={value}
+          max={maxHoje ? hoje() : undefined}
+          onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
+          style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", border: "none" }}
+          aria-label="Escolher data no calendário"
+        />
+      </div>
+
+      <button
+        onClick={() => { if (!(maxHoje && ehHoje)) onChange(somarDias(value, 1)); }}
+        disabled={maxHoje && ehHoje}
+        style={{ ...btnSec, padding: "12px 14px", fontSize: 18, opacity: (maxHoje && ehHoje) ? 0.35 : 1, cursor: (maxHoje && ehHoje) ? "default" : "pointer" }}
+        aria-label="Próximo dia"
+      >›</button>
+    </div>
+  );
+}
+
 // ============================ [UI-HOJE] =====================================
 function AbaHoje({ dados, setDados, pesoAtual }) {
   // Data selecionada — começa em hoje, mas o usuário pode navegar para dias anteriores
@@ -369,35 +412,8 @@ function AbaHoje({ dados, setDados, pesoAtual }) {
   return (
     <div>
       {/* SELETOR DE DATA — setas para dia anterior/próximo + calendário */}
-      <div style={{ ...card, padding: 12, display: "flex", alignItems: "center", gap: 8 }}>
-        <button
-          onClick={() => setD(somarDias(d, -1))}
-          style={{ ...btnSec, padding: "10px 14px", fontSize: 18 }}
-          aria-label="Dia anterior"
-        >‹</button>
-
-        <div style={{ flex: 1, textAlign: "center", position: "relative" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: ehHoje ? ACCENT : TEXT }}>
-            {ehHoje ? "Hoje" : fmtData(d)}
-          </div>
-          <div style={{ fontSize: 11, color: MUTED }}>{ehHoje ? fmtData(d) : "dia anterior"}</div>
-          {/* input de data invisível por cima, abre o calendário nativo ao tocar */}
-          <input
-            type="date"
-            value={d}
-            max={hoje()}
-            onChange={(e) => { if (e.target.value) setD(e.target.value); }}
-            style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", border: "none" }}
-            aria-label="Escolher data no calendário"
-          />
-        </div>
-
-        <button
-          onClick={() => { if (!ehHoje) setD(somarDias(d, 1)); }}
-          disabled={ehHoje}
-          style={{ ...btnSec, padding: "10px 14px", fontSize: 18, opacity: ehHoje ? 0.35 : 1, cursor: ehHoje ? "default" : "pointer" }}
-          aria-label="Próximo dia"
-        >›</button>
+      <div style={{ ...card, padding: 12 }}>
+        <SeletorData value={d} onChange={setD} />
       </div>
 
       {/* Botão para voltar rápido ao hoje, só aparece quando está num dia passado */}
@@ -947,19 +963,8 @@ function AbaMedidas({ dados, setDados }) {
         {/* Seletor de data da medição — permite lançar bioimpedâncias/dobras antigas */}
         <div style={{ marginBottom: 14 }}>
           <label style={lbl}>Data da medição</label>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={() => setDataMedida(somarDias(dataMedida, -1))} style={{ ...btnSec, padding: "10px 14px", fontSize: 18 }} aria-label="Dia anterior">‹</button>
-            <div style={{ flex: 1, textAlign: "center", position: "relative", background: CARD2, border: "1px solid " + BORDER, borderRadius: 10, padding: "10px 0" }}>
-              <span style={{ fontSize: 15, fontWeight: 700, color: dataMedida === hoje() ? ACCENT : TEXT }}>
-                {dataMedida === hoje() ? "Hoje" : fmtData(dataMedida)}
-              </span>
-              <input type="date" value={dataMedida} max={hoje()} onChange={(e) => { if (e.target.value) setDataMedida(e.target.value); }}
-                style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", border: "none" }} aria-label="Escolher data" />
-            </div>
-            <button onClick={() => { if (dataMedida !== hoje()) setDataMedida(somarDias(dataMedida, 1)); }} disabled={dataMedida === hoje()}
-              style={{ ...btnSec, padding: "10px 14px", fontSize: 18, opacity: dataMedida === hoje() ? 0.35 : 1 }} aria-label="Próximo dia">›</button>
-          </div>
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Toque no centro para abrir o calendário e lançar uma medida antiga.</div>
+          <SeletorData value={dataMedida} onChange={setDataMedida} />
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Use o 📅 para saltar para uma data distante, ou as setas para ajustar dia a dia.</div>
           {jaExisteNaData && (
             <div style={{ fontSize: 12, color: ORANGE, marginTop: 6 }}>
               ⚠ Já existe uma medida nesta data. Salvar vai substituí-la.
