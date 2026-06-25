@@ -1128,9 +1128,59 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
     const minCronometrados = Math.max(1, Math.round(segDecorridos / 60));
     const duracaoFinal = duracao ? +duracao : minCronometrados;
     const kcal = (fonteKcal === "smartwatch" && kcalSW) ? +kcalSW : calcularCaloriasTreino(intensidade, pesoAtual, duracaoFinal);
-    const reg = { data: hoje(), fichaId: treinoAtivo.fichaId, duracaoMin: duracaoFinal, kcal, fonteKcal, series: treinoAtivo.series };
+    const reg = { id: Date.now(), data: hoje(), fichaId: treinoAtivo.fichaId, duracaoMin: duracaoFinal, kcal, fonteKcal, series: treinoAtivo.series };
     setDados({ ...dados, historicoTreinos: [reg, ...dados.historicoTreinos] });
     setTreinoAtivo(null); setDuracao(""); setKcalSW("");
+  }
+
+  // ---- REMOVER / EDITAR treino do histórico ----
+  // Identificamos cada treino pelo id. Treinos antigos (sem id) caem para o
+  // índice real no array como chave de fallback.
+  const [editandoTreino, setEditandoTreino] = useState(null); // chave do treino aberto
+  const [rascunhoT, setRascunhoT] = useState(null); // cópia editável do treino
+
+  const chaveTreino = (t, idxReal) => (t.id != null ? "id:" + t.id : "idx:" + idxReal);
+
+  function removerTreino(t, idxReal) {
+    if (!confirm("Remover este treino de " + fmtData(t.data) + "?")) return;
+    const lista = dados.historicoTreinos.filter((x, i) =>
+      t.id != null ? x.id !== t.id : i !== idxReal
+    );
+    setDados({ ...dados, historicoTreinos: lista });
+  }
+
+  function abrirEdicaoTreino(t, idxReal) {
+    setEditandoTreino(chaveTreino(t, idxReal));
+    // Cópia profunda das séries para editar sem afetar o original até salvar
+    setRascunhoT({
+      data: t.data,
+      duracaoMin: String(t.duracaoMin),
+      kcal: String(t.kcal),
+      series: JSON.parse(JSON.stringify(t.series || {})),
+    });
+  }
+
+  function editarSerieRascunho(ei, si, campo, val) {
+    setRascunhoT((prev) => {
+      const series = { ...prev.series };
+      series[ei] = [...series[ei]];
+      series[ei][si] = { ...series[ei][si], [campo]: val };
+      return { ...prev, series };
+    });
+  }
+
+  function salvarEdicaoTreino(t, idxReal) {
+    const dur = parseInt(rascunhoT.duracaoMin, 10);
+    const kc = parseInt(rascunhoT.kcal, 10);
+    if (!dur || dur < 1) { alert("Informe uma duração válida."); return; }
+    if (!kc || kc < 0) { alert("Informe calorias válidas."); return; }
+    const atualizado = { ...t, data: rascunhoT.data, duracaoMin: dur, kcal: kc, series: rascunhoT.series };
+    const lista = dados.historicoTreinos.map((x, i) =>
+      (t.id != null ? x.id === t.id : i === idxReal) ? atualizado : x
+    );
+    setDados({ ...dados, historicoTreinos: lista });
+    setEditandoTreino(null); setRascunhoT(null);
+    alert("Treino de " + fmtData(rascunhoT.data) + " atualizado.");
   }
 
   // ---- treino em andamento ----
@@ -1260,18 +1310,77 @@ function AbaTreinos({ dados, setDados, pesoAtual }) {
       {dados.historicoTreinos.length > 0 && (
         <div style={card}>
           <div style={cardTitle}>HISTÓRICO</div>
-          {dados.historicoTreinos.slice(0, 12).map((t, i) => {
+          {dados.historicoTreinos.map((t, idxReal) => ({ t, idxReal })).slice(0, 12).map(({ t, idxReal }) => {
             const ficha = dados.fichas.find((f) => f.id === t.fichaId);
+            const chave = chaveTreino(t, idxReal);
+            const emEdicao = editandoTreino === chave;
             return (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
-                <div>
-                  <div style={{ color: TEXT, fontSize: 14 }}>{ficha ? ficha.nome.split("—")[0] : t.fichaId}</div>
-                  <div style={{ color: MUTED, fontSize: 12 }}>{fmtData(t.data)} · {t.duracaoMin}min</div>
+              <div key={chave} style={{ padding: "10px 0", borderBottom: "1px solid " + BORDER }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ color: TEXT, fontSize: 14 }}>{ficha ? ficha.nome.split("—")[0] : t.fichaId}</div>
+                    <div style={{ color: MUTED, fontSize: 12 }}>{fmtData(t.data)} · {t.duracaoMin}min</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ color: ACCENT, fontFamily: "'DM Mono', monospace", fontWeight: 700 }}>{t.kcal} kcal</div>
+                      <div style={{ color: MUTED, fontSize: 11 }}>{t.fonteKcal === "smartwatch" ? "relógio" : "estimado"}</div>
+                    </div>
+                    <button onClick={() => (emEdicao ? (setEditandoTreino(null), setRascunhoT(null)) : abrirEdicaoTreino(t, idxReal))} style={{ background: "none", border: "none", color: emEdicao ? ACCENT : MUTED, cursor: "pointer", fontSize: 16, padding: "4px 6px" }} aria-label="Editar treino">
+                      {emEdicao ? "▲" : "✎"}
+                    </button>
+                    <button onClick={() => removerTreino(t, idxReal)} style={{ background: "none", border: "none", color: RED, cursor: "pointer", fontSize: 18 }} aria-label="Remover treino">×</button>
+                  </div>
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ color: ACCENT, fontFamily: "'DM Mono', monospace", fontWeight: 700 }}>{t.kcal} kcal</div>
-                  <div style={{ color: MUTED, fontSize: 11 }}>{t.fonteKcal === "smartwatch" ? "relógio" : "estimado"}</div>
-                </div>
+
+                {/* Painel de edição do treino */}
+                {emEdicao && rascunhoT && (
+                  <div style={{ background: CARD2, border: "1px solid " + ACCENT, borderRadius: 10, padding: 12, marginTop: 10 }}>
+                    {/* Dados principais */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                      <div>
+                        <label style={lbl}>Data</label>
+                        <input type="date" value={rascunhoT.data} max={hoje()} onChange={(e) => { if (e.target.value) setRascunhoT({ ...rascunhoT, data: e.target.value }); }} style={inputSm} />
+                      </div>
+                      <div>
+                        <label style={lbl}>Duração (min)</label>
+                        <input type="number" value={rascunhoT.duracaoMin} onChange={(e) => setRascunhoT({ ...rascunhoT, duracaoMin: e.target.value })} style={inputSm} />
+                      </div>
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <label style={lbl}>Calorias (kcal)</label>
+                        <input type="number" value={rascunhoT.kcal} onChange={(e) => setRascunhoT({ ...rascunhoT, kcal: e.target.value })} style={inputSm} />
+                      </div>
+                    </div>
+
+                    {/* Séries por exercício */}
+                    {ficha && rascunhoT.series && Object.keys(rascunhoT.series).length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 11, color: MUTED, marginBottom: 8, fontWeight: 600 }}>SÉRIES (reps · carga)</div>
+                        {ficha.exercicios.map((ex, ei) => (
+                          rascunhoT.series[ei] ? (
+                            <div key={ei} style={{ marginBottom: 10 }}>
+                              <div style={{ color: TEXT, fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{ex.nome}</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "20px 1fr 1fr", gap: 6, alignItems: "center" }}>
+                                {rascunhoT.series[ei].map((s, si) => (
+                                  <React.Fragment key={si}>
+                                    <div style={{ color: MUTED, fontSize: 12, fontWeight: 700 }}>{si + 1}</div>
+                                    <input type="number" value={s.reps} onChange={(e) => editarSerieRascunho(ei, si, "reps", e.target.value)} style={{ ...inputSm, padding: "6px 8px" }} placeholder="reps" />
+                                    <input type="number" value={s.carga} onChange={(e) => editarSerieRascunho(ei, si, "carga", e.target.value)} style={{ ...inputSm, padding: "6px 8px" }} placeholder="kg" />
+                                  </React.Fragment>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => salvarEdicaoTreino(t, idxReal)} style={{ ...btnPrimarySm, flex: 1 }}>Salvar alterações</button>
+                      <button onClick={() => { setEditandoTreino(null); setRascunhoT(null); }} style={btnGhost}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
