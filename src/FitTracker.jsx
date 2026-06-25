@@ -94,8 +94,38 @@ function gorduraPor7Dobras(soma, idade) {
 
 // ============================ [STORE] =======================================
 const STORAGE_KEY = "fittracker_v2";
-const hoje = () => new Date().toISOString().slice(0, 10);
+
+/*
+ * DATA NO FUSO DE BRASÍLIA (UTC-3)
+ * --------------------------------
+ * Antes usávamos new Date().toISOString(), que converte para UTC. Como UTC
+ * está 3h à frente de Brasília, o dia "virava" às 21h em vez da meia-noite.
+ * Estas funções resolvem isso pegando a data já no fuso de São Paulo.
+ *
+ * dataBrasilia(d) recebe um objeto Date e devolve a string "AAAA-MM-DD"
+ * correspondente ao dia daquele instante no horário de Brasília.
+ */
+function dataBrasilia(dateObj) {
+  // en-CA produz o formato AAAA-MM-DD; o timeZone faz o ajuste do fuso
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(dateObj);
+}
+const hoje = () => dataBrasilia(new Date());
 const fmtData = (d) => d.split("-").reverse().join("/");
+
+// Soma/subtrai dias a uma data "AAAA-MM-DD" sem cair em armadilha de fuso.
+// Trabalha com a data ao meio-dia para nunca cruzar a virada do dia por engano.
+function somarDias(dataStr, n) {
+  const [a, m, d] = dataStr.split("-").map(Number);
+  const dt = new Date(a, m - 1, d, 12, 0, 0); // meio-dia local, seguro
+  dt.setDate(dt.getDate() + n);
+  const ano = dt.getFullYear();
+  const mes = String(dt.getMonth() + 1).padStart(2, "0");
+  const dia = String(dt.getDate()).padStart(2, "0");
+  return ano + "-" + mes + "-" + dia;
+}
 
 function carregarDados() {
   try { const r = localStorage.getItem(STORAGE_KEY); if (r) return JSON.parse(r); }
@@ -201,8 +231,10 @@ function MiniGrafico({ pontos, cor, label, valorAtual }) {
 
 // ============================ [UI-HOJE] =====================================
 function AbaHoje({ dados, setDados }) {
-  const d = hoje();
+  // Data selecionada — começa em hoje, mas o usuário pode navegar para dias anteriores
+  const [d, setD] = useState(hoje());
   const diaAtual = dados.diario[d] || { itens: [], refeicoesFeitas: {} };
+  const ehHoje = d === hoje();
 
   // Base completa = base fixa + alimentos custom do usuário
   const baseCompleta = useMemo(
@@ -279,9 +311,48 @@ function AbaHoje({ dados, setDados }) {
 
   return (
     <div>
+      {/* SELETOR DE DATA — setas para dia anterior/próximo + calendário */}
+      <div style={{ ...card, padding: 12, display: "flex", alignItems: "center", gap: 8 }}>
+        <button
+          onClick={() => setD(somarDias(d, -1))}
+          style={{ ...btnSec, padding: "10px 14px", fontSize: 18 }}
+          aria-label="Dia anterior"
+        >‹</button>
+
+        <div style={{ flex: 1, textAlign: "center", position: "relative" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: ehHoje ? ACCENT : TEXT }}>
+            {ehHoje ? "Hoje" : fmtData(d)}
+          </div>
+          <div style={{ fontSize: 11, color: MUTED }}>{ehHoje ? fmtData(d) : "dia anterior"}</div>
+          {/* input de data invisível por cima, abre o calendário nativo ao tocar */}
+          <input
+            type="date"
+            value={d}
+            max={hoje()}
+            onChange={(e) => { if (e.target.value) setD(e.target.value); }}
+            style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", border: "none" }}
+            aria-label="Escolher data no calendário"
+          />
+        </div>
+
+        <button
+          onClick={() => { if (!ehHoje) setD(somarDias(d, 1)); }}
+          disabled={ehHoje}
+          style={{ ...btnSec, padding: "10px 14px", fontSize: 18, opacity: ehHoje ? 0.35 : 1, cursor: ehHoje ? "default" : "pointer" }}
+          aria-label="Próximo dia"
+        >›</button>
+      </div>
+
+      {/* Botão para voltar rápido ao hoje, só aparece quando está num dia passado */}
+      {!ehHoje && (
+        <button onClick={() => setD(hoje())} style={{ ...btnGhost, width: "100%", marginTop: -8, marginBottom: 16, color: ACCENT, borderColor: ACCENT }}>
+          ↩ Voltar para hoje
+        </button>
+      )}
+
       {/* RESUMO */}
       <div style={card}>
-        <div style={cardTitle}>RESUMO DE HOJE</div>
+        <div style={cardTitle}>{ehHoje ? "RESUMO DE HOJE" : "RESUMO DO DIA"}</div>
         <Barra atual={totais.kcal} meta={META_MACROS.calorias} label="Calorias (kcal)" cor={ACCENT} />
         <Barra atual={totais.p} meta={META_MACROS.proteina} label="Proteína (g)" cor={BLUE} />
         <Barra atual={totais.c} meta={META_MACROS.carbo} label="Carboidrato (g)" cor={ORANGE} />
@@ -842,9 +913,9 @@ function AbaDashboard({ dados }) {
 
   function diasAtras(n) {
     const arr = [];
+    const h = hoje(); // já no fuso de Brasília
     for (let i = 0; i < n; i++) {
-      const dt = new Date(); dt.setDate(dt.getDate() - i);
-      arr.push(dt.toISOString().slice(0, 10));
+      arr.push(somarDias(h, -i));
     }
     return arr;
   }
