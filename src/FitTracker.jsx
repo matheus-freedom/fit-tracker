@@ -116,6 +116,25 @@ function calcularCaloriasTreino(met, pesoKg, duracaoMin) {
 }
 
 /*
+ * GASTO CALÓRICO DE UM DIA — decide a fonte em CASCATA, dia a dia:
+ *   1. Se há número do Amazfit para o dia → usa ELE (mede tudo, mais preciso).
+ *   2. Senão → estimativa = meta base (TMB) + gasto dos treinos registrados.
+ * Devolve { total, fonte } onde fonte é "amazfit" ou "estimativa", para o app
+ * exibir o selo certo e não misturar as réguas sem o usuário saber.
+ * Isso resolve o caso do usuário: dias com relógio usam o relógio; dias sem
+ * (boxe, relógio esquecido) caem na estimativa e não ficam órfãos.
+ */
+function calcularGastoDia(dados, data, metaCal) {
+  const amazfit = dados.gastoAmazfitPorDia && dados.gastoAmazfitPorDia[data];
+  if (amazfit != null && amazfit > 0) {
+    return { total: amazfit, fonte: "amazfit" };
+  }
+  const treinosDia = dados.historicoTreinos.filter((t) => t.data === data);
+  const gastoTreino = treinosDia.reduce((a, t) => a + t.kcal, 0);
+  return { total: metaCal + gastoTreino, fonte: "estimativa" };
+}
+
+/*
  * DOBRAS CUTÂNEAS — converte soma de dobras em % de gordura.
  * 3 dobras (Jackson&Pollock H: peitoral, abdominal, coxa)
  * 7 dobras (peitoral, axilar, tríceps, subescapular, abdominal, suprailíaca, coxa)
@@ -211,6 +230,10 @@ const ESTADO_INICIAL = {
   // Planejamento: { "2026-06-30": [{tipo:"ficha", fichaId:"A"}, {tipo:"atividade", nome:"Corrida", met:10, duracaoMin:30}] }
   // São intenções para dias futuros; ao confirmar, viram treino de verdade no histórico.
   treinosPlanejados: {},
+  // Gasto calórico total medido pelo Amazfit, por dia: { "2026-06-25": 2500 }
+  // Quando existe para um dia, ELE é a fonte do gasto (ignora TMB+treinos), pois
+  // o relógio já mede tudo. Ausente = cai para a estimativa (TMB + treinos).
+  gastoAmazfitPorDia: {},
 };
 
 // ============================ ESTILOS =======================================
@@ -1562,6 +1585,16 @@ function AbaResumo({ dados, setDados, pesoAtual, irPara }) {
   const treinosDia = dados.historicoTreinos.filter((t) => t.data === d);
   const gastoTreino = treinosDia.reduce((a, t) => a + t.kcal, 0);
 
+  // --- GASTO do dia em cascata (Amazfit se informado, senão TMB + treinos) ---
+  const gastoDia = calcularGastoDia(dados, d, metaCal);
+  const amazfitDoDia = (dados.gastoAmazfitPorDia && dados.gastoAmazfitPorDia[d]) || null;
+  function salvarAmazfit(valor) {
+    const novo = { ...dados.gastoAmazfitPorDia };
+    if (valor == null || valor === "") delete novo[d]; // limpar volta para estimativa
+    else novo[d] = valor;
+    setDados({ ...dados, gastoAmazfitPorDia: novo });
+  }
+
   // --- PLANO do dia ---
   const plano = (dados.treinosPlanejados && dados.treinosPlanejados[d]) || [];
 
@@ -1694,7 +1727,11 @@ function AbaResumo({ dados, setDados, pesoAtual, irPara }) {
               </div>
             ))}
             {treinosDia.length > 0 && (
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>Gasto total: {gastoTreino} kcal</div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
+                {gastoDia.fonte === "amazfit"
+                  ? "Estimativa dos treinos: " + gastoTreino + " kcal (não somada — o gasto do dia vem do relógio)"
+                  : "Gasto total: " + gastoTreino + " kcal"}
+              </div>
             )}
           </div>
         )}
@@ -1742,8 +1779,53 @@ function AbaResumo({ dados, setDados, pesoAtual, irPara }) {
         )}
       </div>
 
+      {/* ===== GASTO DO DIA (Amazfit) ===== */}
+      {!ehFuturo && (
+        <CampoAmazfit
+          key={d}
+          valorSalvo={amazfitDoDia}
+          gastoEstimado={metaCal + gastoTreino}
+          onSalvar={salvarAmazfit}
+        />
+      )}
+
       {showAddPlano && (
         <ModalPlanejarTreino fichas={dados.fichas} onAdicionar={adicionarAoPlano} onClose={() => setShowAddPlano(false)} />
+      )}
+    </div>
+  );
+}
+
+// Card de gasto calórico do Amazfit para um dia. key={data} força reset ao trocar de dia.
+function CampoAmazfit({ valorSalvo, gastoEstimado, onSalvar }) {
+  const [input, setInput] = useState(valorSalvo != null ? String(valorSalvo) : "");
+  const salvo = valorSalvo != null;
+
+  function salvar() {
+    const v = parseInt(input, 10);
+    if (!v || v < 500) { alert("Informe um gasto válido (mínimo 500 kcal)."); return; }
+    onSalvar(v);
+  }
+  function limpar() {
+    setInput("");
+    onSalvar(null);
+  }
+
+  return (
+    <div style={card}>
+      <div style={cardTitle}>⌚ GASTO PELO RELÓGIO (AMAZFIT)</div>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+        Se usou o Amazfit hoje, digite o gasto total que ele mostrou. O app passa a usar esse número no lugar da estimativa (ele já inclui seus treinos). Sem preencher, o app estima em {gastoEstimado} kcal.
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="number" placeholder="ex: 2500" value={input} onChange={(e) => setInput(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+        <button onClick={salvar} style={btnPrimarySm}>Salvar</button>
+        {salvo && <button onClick={limpar} style={btnGhost}>Limpar</button>}
+      </div>
+      {salvo && (
+        <div style={{ marginTop: 10, fontSize: 12, color: BLUE, fontWeight: 600 }}>
+          ✓ Usando {valorSalvo} kcal do relógio como gasto do dia.
+        </div>
       )}
     </div>
   );
@@ -1820,20 +1902,21 @@ function AbaDashboard({ dados }) {
     const dia = dados.diario[data];
     const itens = dia ? dia.itens : [];
     const consumido = itens.reduce((a, it) => ({ kcal: a.kcal + it.kcal, p: a.p + it.p, c: a.c + it.c, g: a.g + it.g }), { kcal: 0, p: 0, c: 0, g: 0 });
-    const treinosDia = dados.historicoTreinos.filter((t) => t.data === data);
-    const gastoTreino = treinosDia.reduce((a, t) => a + t.kcal, 0);
-    return { consumido, gastoTreino };
+    // Gasto do dia via cascata: Amazfit se informado, senão TMB + treinos
+    const gasto = calcularGastoDia(dados, data, metaCal);
+    return { consumido, gastoTotal: gasto.total, fonteGasto: gasto.fonte };
   }
 
-  // Balanço calórico do dia = consumido - (meta + gastoTreino)
+  // Balanço calórico do dia = consumido - gasto total do dia
   function balancoDia(data) {
-    const { consumido, gastoTreino } = totaisDoDia(data);
+    const { consumido, gastoTotal, fonteGasto } = totaisDoDia(data);
     return {
-      kcal: consumido.kcal - (metaCal + gastoTreino),
+      kcal: consumido.kcal - gastoTotal,
       p: consumido.p - META_MACROS.proteina,
       c: consumido.c - META_MACROS.carbo,
       g: consumido.g - META_MACROS.gordura,
       temDados: consumido.kcal > 0,
+      fonteGasto,
     };
   }
 
@@ -1884,6 +1967,11 @@ function AbaDashboard({ dados }) {
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
             kcal · {deficit ? "DÉFICIT (perdendo)" : kcal === 0 ? "neutro" : "SUPERÁVIT (ganhando)"}
           </div>
+          {periodo === "hoje" && bal.fonteGasto && (
+            <div style={{ display: "inline-block", marginTop: 8, fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, background: CARD2, color: bal.fonteGasto === "amazfit" ? BLUE : MUTED, border: "1px solid " + (bal.fonteGasto === "amazfit" ? BLUE : BORDER) }}>
+              {bal.fonteGasto === "amazfit" ? "⌚ gasto medido pelo relógio" : "gasto estimado"}
+            </div>
+          )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
           {[["Proteína", bal.p, BLUE], ["Carbo", bal.c, ORANGE], ["Gordura", bal.g, PINK]].map(([l, v, cor]) => (
